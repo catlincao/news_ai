@@ -1,0 +1,43 @@
+# Feed configuration for News AI Summary
+# Source: Miniflux API
+
+feeds:
+  - id: 46
+    name: "华尔街见闻 - 资讯 - 最新"
+    category: "资讯"
+    enabled: true
+
+  - id: 39
+    name: "东方财富网-行业研报"
+    category: "研报"
+    enabled: true
+
+  - id: 41
+    name: "东方财富网-个股研报"
+    category: "研报"
+    enabled: true
+
+  - id: 38
+    name: "东方财富网-策略报告"
+    category: "策略"
+    enabled: true
+
+  - id: 40
+    name: "东方财富网-宏观研究"
+    category: "宏观"
+    enabled: true
+
+  - id: 42
+    name: "东方财富网-券商晨报"
+    category: "晨报"
+    enabled: true
+
+  - id: 47
+    name: "韭研公社-研究共享"
+    category: "社群"
+    enabled: true
+
+  - id: 45
+    name: "华尔街见闻 - 最热文章"
+    category: "热点"
+    enabled: true
