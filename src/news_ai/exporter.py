@@ -33,6 +33,12 @@ class MarkdownExporter:
 
 ---
 
+## 标的一览
+
+{tickers_section}
+
+---
+
 ## 分类统计
 
 |category|数量|
@@ -136,12 +142,29 @@ class MarkdownExporter:
         for i, h in enumerate(report.result.highlights, 1):
             highlights_lines.append(f"### {i}. {h.title}")
             highlights_lines.append(f"- **来源**: {h.source}")
+            if h.url:
+                highlights_lines.append(f"- **链接**: [{h.url}]({h.url})")
             highlights_lines.append(f"- **摘要**: {h.summary}")
             if h.importance != "medium":
                 highlights_lines.append(f"- **重要性**: {h.importance}")
+            if h.tickers:
+                highlights_lines.append(f"- **标的**: {', '.join(h.tickers)}")
             highlights_lines.append("")
 
         highlights_text = "\n".join(highlights_lines)
+
+        # Build tickers section
+        if report.result.tickers:
+            tickers_lines = []
+            # Sort by code
+            sorted_tickers = sorted(report.result.tickers, key=lambda t: t.code)
+            tickers_lines.append("| 代码 | 名称 |")
+            tickers_lines.append("|------|------|")
+            for ticker in sorted_tickers:
+                tickers_lines.append(f"| {ticker.code} | {ticker.name} |")
+            tickers_text = "\n".join(tickers_lines)
+        else:
+            tickers_text = "未识别到相关标的"
 
         # Build category stats table
         category_stats_lines = []
@@ -175,6 +198,7 @@ class MarkdownExporter:
             total_count=report.total_count,
             summary=report.result.summary,
             highlights=highlights_text,
+            tickers_section=tickers_text,
             category_stats=category_stats_text,
             keywords=", ".join(report.result.keywords),
             sentiment=sentiment_text,
@@ -198,6 +222,38 @@ class MarkdownExporter:
 
         return filepath
 
+    def export_to_path(self, report: SummaryReport, filepath: str) -> Path:
+        """
+        Export summary report to a specific file path.
+
+        Args:
+            report: SummaryReport object
+            filepath: Specific file path to save to
+
+        Returns:
+            Path to created file
+
+        Raises:
+            PermissionError: If file cannot be written
+        """
+        # Render the report content
+        content = self.render_report(report)
+
+        # Write to specified path
+        path = Path(filepath)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(content, encoding="utf-8")
+            logger.info(f"Exported report to {path}")
+        except PermissionError as e:
+            logger.error(f"Permission denied writing file: {path}")
+            raise PermissionError(
+                f"Cannot write file: {path}. "
+                "Please check directory permissions."
+            ) from e
+
+        return path
+
     def render_report(self, report: SummaryReport) -> str:
         """
         Render summary report to Markdown string without saving.
@@ -219,12 +275,29 @@ class MarkdownExporter:
         for i, h in enumerate(report.result.highlights, 1):
             highlights_lines.append(f"### {i}. {h.title}")
             highlights_lines.append(f"- **来源**: {h.source}")
+            if h.url:
+                highlights_lines.append(f"- **链接**: [{h.url}]({h.url})")
             highlights_lines.append(f"- **摘要**: {h.summary}")
             if h.importance != "medium":
                 highlights_lines.append(f"- **重要性**: {h.importance}")
+            if h.tickers:
+                highlights_lines.append(f"- **标的**: {', '.join(h.tickers)}")
             highlights_lines.append("")
 
         highlights_text = "\n".join(highlights_lines)
+
+        # Build tickers section
+        if report.result.tickers:
+            tickers_lines = []
+            # Sort by code
+            sorted_tickers = sorted(report.result.tickers, key=lambda t: t.code)
+            tickers_lines.append("| 代码 | 名称 |")
+            tickers_lines.append("|------|------|")
+            for ticker in sorted_tickers:
+                tickers_lines.append(f"| {ticker.code} | {ticker.name} |")
+            tickers_text = "\n".join(tickers_lines)
+        else:
+            tickers_text = "未识别到相关标的"
 
         # Build category stats table
         category_stats_lines = []
@@ -258,6 +331,7 @@ class MarkdownExporter:
             total_count=report.total_count,
             summary=report.result.summary,
             highlights=highlights_text,
+            tickers_section=tickers_text,
             category_stats=category_stats_text,
             keywords=", ".join(report.result.keywords),
             sentiment=sentiment_text,

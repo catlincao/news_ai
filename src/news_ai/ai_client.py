@@ -9,7 +9,7 @@ import anthropic
 import openai
 from loguru import logger
 
-from news_ai.models import SummarizeResult, Highlight
+from news_ai.models import SummarizeResult, Highlight, Ticker
 
 
 class AIClient(Protocol):
@@ -86,7 +86,7 @@ class OpenAIClient:
                 result_text = response.choices[0].message.content
                 json_str = self._extract_json(result_text)
                 json_str = self._repair_json(json_str)
-                data = json.loads(json_str)
+                data = self._parse_json_with_fallback(json_str)
 
                 return SummarizeResult(
                     summary=data.get("summary", ""),
@@ -94,13 +94,19 @@ class OpenAIClient:
                         Highlight(
                             title=h["title"],
                             source=h.get("source", ""),
+                            url=h.get("url", ""),
                             summary=h.get("summary", ""),
                             importance=h.get("importance", "medium"),
+                            tickers=h.get("tickers", []),
                         )
                         for h in data.get("highlights", [])
                     ],
                     keywords=data.get("keywords", []),
                     sentiment=data.get("sentiment", "neutral"),
+                    tickers=[
+                        Ticker(code=t.get("code", ""), name=t.get("name", ""))
+                        for t in data.get("tickers", [])
+                    ],
                 )
 
             except openai.APIError as e:
@@ -134,7 +140,7 @@ class OpenAIClient:
 
     @staticmethod
     def _repair_json(json_str: str) -> str:
-        """Repair common JSON formatting issues like missing commas."""
+        """Repair common JSON formatting issues like missing commas and unescaped quotes."""
         # Fix missing commas between object fields (when newline separates fields)
         # This handles cases like: "field": value\n  "next_field": value
         json_str = re.sub(
@@ -148,7 +154,116 @@ class OpenAIClient:
             r'\1,"\2',
             json_str
         )
+        # Fix unescaped quotes inside string values
+        # Match field values that contain unescaped quotes
+        def fix_unescaped_in_value(m):
+            prefix = m.group(1)  # "fieldname": "
+            content = m.group(2)  # the value content
+            suffix = m.group(3)  # closing "
+            # Escape all unescaped quotes within the content
+            result = ""
+            i = 0
+            while i < len(content):
+                c = content[i]
+                if c == '\\' and i + 1 < len(content):
+                    # Already escaped sequence, keep as-is
+                    result += content[i:i+2]
+                    i += 2
+                elif c == '"':
+                    # Unescaped quote - escape it
+                    result += '\\"'
+                    i += 1
+                else:
+                    result += c
+                    i += 1
+            return prefix + result + suffix
+        # Match string values that might have unescaped inner quotes
+        json_str = re.sub(
+            r'("(?:summary|title|source|url|tickers?|keywords?|sentiment|code|name|importance|highlights?|tickers)":\s*")((?:[^"\\]|\\.)*)(")',
+            fix_unescaped_in_value,
+            json_str
+        )
         return json_str
+
+    @staticmethod
+    def _parse_json_with_fallback(json_str: str) -> dict:
+        """Parse JSON with multiple fallback repair strategies."""
+        # Strategy 1: Try standard JSON parsing first
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Try to fix common issues
+        repaired = json_str
+
+        # Find all string values and escape inner quotes
+        def escape_inner_quotes(m):
+            prefix = m.group(1)
+            content = m.group(2)
+            suffix = m.group(3)
+            result = ""
+            i = 0
+            while i < len(content):
+                c = content[i]
+                if c == '\\':
+                    result += content[i:i+2]
+                    i += 2
+                elif c == '"':
+                    result += '\\"'
+                    i += 1
+                elif c == '\n':
+                    result += '\\n'
+                    i += 1
+                else:
+                    result += c
+                    i += 1
+            return prefix + result + suffix
+
+        # Match pattern: "field": "content"
+        repaired = re.sub(
+            r'("(?:[^"\\]|\\.)*"):\s*(")((?:[^"\\]|\\.)*)(")',
+            escape_inner_quotes,
+            repaired
+        )
+
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 3: Replace smart quotes
+        repaired = json_str
+        repaired = repaired.replace('"', '"').replace('"', '"')
+        repaired = repaired.replace(''', "'").replace(''', "'")
+
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 4: Extract fields using regex as last resort
+        result = {
+            "summary": "",
+            "highlights": [],
+            "keywords": [],
+            "sentiment": "neutral",
+            "tickers": []
+        }
+
+        summary_match = re.search(r'"summary":\s*"([^"]*)"', repaired)
+        if summary_match:
+            result["summary"] = summary_match.group(1)
+
+        sentiment_match = re.search(r'"sentiment":\s*"(positive|neutral|negative)"', repaired)
+        if sentiment_match:
+            result["sentiment"] = sentiment_match.group(1)
+
+        keywords_match = re.search(r'"keywords":\s*\[(.*?)\]', repaired, re.DOTALL)
+        if keywords_match:
+            result["keywords"] = re.findall(r'"([^"]*)"', keywords_match.group(1))
+
+        return result
 
 
 class AnthropicClient:
@@ -228,7 +343,7 @@ class AnthropicClient:
 
                 json_str = self._extract_json(result_text)
                 json_str = self._repair_json(json_str)
-                data = json.loads(json_str)
+                data = self._parse_json_with_fallback(json_str)
 
                 return SummarizeResult(
                     summary=data.get("summary", ""),
@@ -236,13 +351,19 @@ class AnthropicClient:
                         Highlight(
                             title=h["title"],
                             source=h.get("source", ""),
+                            url=h.get("url", ""),
                             summary=h.get("summary", ""),
                             importance=h.get("importance", "medium"),
+                            tickers=h.get("tickers", []),
                         )
                         for h in data.get("highlights", [])
                     ],
                     keywords=data.get("keywords", []),
                     sentiment=data.get("sentiment", "neutral"),
+                    tickers=[
+                        Ticker(code=t.get("code", ""), name=t.get("name", ""))
+                        for t in data.get("tickers", [])
+                    ],
                 )
 
             except anthropic.APIError as e:
@@ -276,7 +397,7 @@ class AnthropicClient:
 
     @staticmethod
     def _repair_json(json_str: str) -> str:
-        """Repair common JSON formatting issues like missing commas."""
+        """Repair common JSON formatting issues like missing commas and unescaped quotes."""
         # Fix missing commas between object fields (when newline separates fields)
         # This handles cases like: "field": value\n  "next_field": value
         json_str = re.sub(
@@ -290,7 +411,116 @@ class AnthropicClient:
             r'\1,"\2',
             json_str
         )
+        # Fix unescaped quotes inside string values
+        # Match field values that contain unescaped quotes
+        def fix_unescaped_in_value(m):
+            prefix = m.group(1)  # "fieldname": "
+            content = m.group(2)  # the value content
+            suffix = m.group(3)  # closing "
+            # Escape all unescaped quotes within the content
+            result = ""
+            i = 0
+            while i < len(content):
+                c = content[i]
+                if c == '\\' and i + 1 < len(content):
+                    # Already escaped sequence, keep as-is
+                    result += content[i:i+2]
+                    i += 2
+                elif c == '"':
+                    # Unescaped quote - escape it
+                    result += '\\"'
+                    i += 1
+                else:
+                    result += c
+                    i += 1
+            return prefix + result + suffix
+        # Match string values that might have unescaped inner quotes
+        json_str = re.sub(
+            r'("(?:summary|title|source|url|tickers?|keywords?|sentiment|code|name|importance|highlights?|tickers)":\s*")((?:[^"\\]|\\.)*)(")',
+            fix_unescaped_in_value,
+            json_str
+        )
         return json_str
+
+    @staticmethod
+    def _parse_json_with_fallback(json_str: str) -> dict:
+        """Parse JSON with multiple fallback repair strategies."""
+        # Strategy 1: Try standard JSON parsing first
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 2: Try to fix common issues
+        repaired = json_str
+
+        # Find all string values and escape inner quotes
+        def escape_inner_quotes(m):
+            prefix = m.group(1)
+            content = m.group(2)
+            suffix = m.group(3)
+            result = ""
+            i = 0
+            while i < len(content):
+                c = content[i]
+                if c == '\\':
+                    result += content[i:i+2]
+                    i += 2
+                elif c == '"':
+                    result += '\\"'
+                    i += 1
+                elif c == '\n':
+                    result += '\\n'
+                    i += 1
+                else:
+                    result += c
+                    i += 1
+            return prefix + result + suffix
+
+        # Match pattern: "field": "content"
+        repaired = re.sub(
+            r'("(?:[^"\\]|\\.)*"):\s*(")((?:[^"\\]|\\.)*)(")',
+            escape_inner_quotes,
+            repaired
+        )
+
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 3: Replace smart quotes
+        repaired = json_str
+        repaired = repaired.replace('"', '"').replace('"', '"')
+        repaired = repaired.replace(''', "'").replace(''', "'")
+
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 4: Extract fields using regex as last resort
+        result = {
+            "summary": "",
+            "highlights": [],
+            "keywords": [],
+            "sentiment": "neutral",
+            "tickers": []
+        }
+
+        summary_match = re.search(r'"summary":\s*"([^"]*)"', repaired)
+        if summary_match:
+            result["summary"] = summary_match.group(1)
+
+        sentiment_match = re.search(r'"sentiment":\s*"(positive|neutral|negative)"', repaired)
+        if sentiment_match:
+            result["sentiment"] = sentiment_match.group(1)
+
+        keywords_match = re.search(r'"keywords":\s*\[(.*?)\]', repaired, re.DOTALL)
+        if keywords_match:
+            result["keywords"] = re.findall(r'"([^"]*)"', keywords_match.group(1))
+
+        return result
 
 
 class AIClientFactory:

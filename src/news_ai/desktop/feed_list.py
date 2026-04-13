@@ -1,5 +1,6 @@
 """Feed list widget for desktop application."""
 
+from dataclasses import dataclass
 from typing import Optional
 
 from PyQt6.QtWidgets import (
@@ -11,12 +12,21 @@ from PyQt6.QtWidgets import (
     QTableWidgetItem,
     QHeaderView,
     QAbstractItemView,
+    QCheckBox,
 )
 from PyQt6.QtCore import Qt
 from loguru import logger
 
 from ..config import AppConfig
 from ..miniflux_client import MinifluxClient
+from ..models import Feed
+
+
+@dataclass
+class FeedSelection:
+    """Represents a feed with its selection state."""
+    feed: Feed
+    fetch_full_content: bool = True  # Default: fetch full content from link
 
 
 class FeedListWidget(QWidget):
@@ -27,6 +37,7 @@ class FeedListWidget(QWidget):
         super().__init__()
         self._config: Optional[AppConfig] = None
         self._client: Optional[MinifluxClient] = None
+        self._feeds: list[FeedSelection] = []
         self._setup_ui()
 
     def _setup_ui(self) -> None:
@@ -41,11 +52,12 @@ class FeedListWidget(QWidget):
         layout.addLayout(button_layout)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["ID", "Name", "Category", "Status"])
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["ID", "Name", "Category", "Status", "补充链接信息"])
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.table)
 
@@ -69,30 +81,40 @@ class FeedListWidget(QWidget):
             return
         try:
             feeds = self._client.list_feeds()
-            self.table.setRowCount(len(feeds))
-            for row, feed in enumerate(feeds):
-                self.table.setItem(row, 0, QTableWidgetItem(str(feed.id)))
-                self.table.setItem(row, 1, QTableWidgetItem(feed.title))
-                self.table.setItem(row, 2, QTableWidgetItem(feed.category))
-                status = "Enabled" if feed.enabled else "Disabled"
+            self._feeds = [FeedSelection(feed=f) for f in feeds]
+            self.table.setRowCount(len(self._feeds))
+            for row, fs in enumerate(self._feeds):
+                self.table.setItem(row, 0, QTableWidgetItem(str(fs.feed.id)))
+                self.table.setItem(row, 1, QTableWidgetItem(fs.feed.title))
+                self.table.setItem(row, 2, QTableWidgetItem(fs.feed.category))
+                status = "Enabled" if fs.feed.enabled else "Disabled"
                 self.table.setItem(row, 3, QTableWidgetItem(status))
+
+                # Add checkbox for "补充链接信息"
+                checkbox = QCheckBox()
+                checkbox.setChecked(fs.fetch_full_content)
+                checkbox.stateChanged.connect(lambda state, r=row: self._on_checkbox_changed(r, state))
+                self.table.setCellWidget(row, 4, checkbox)
+
             logger.info(f"Loaded {len(feeds)} feeds")
         except Exception as e:
             logger.exception("Failed to refresh feeds")
 
-    def get_selected_feed_ids(self) -> list[int]:
-        """Get the IDs of selected feeds.
+    def _on_checkbox_changed(self, row: int, state: int) -> None:
+        """Handle checkbox state change."""
+        if 0 <= row < len(self._feeds):
+            self._feeds[row].fetch_full_content = (state == Qt.CheckState.Checked.value)
+            logger.debug(f"Feed {self._feeds[row].feed.id} fetch_full_content = {self._feeds[row].fetch_full_content}")
+
+    def get_selected_feed_selections(self) -> list[FeedSelection]:
+        """Get the selected feeds with their settings.
 
         Returns:
-            List of selected feed IDs.
+            List of FeedSelection objects for selected feeds.
         """
-        selected_ids = []
+        selections = []
         for index in self.table.selectionModel().selectedRows():
             row = index.row()
-            item = self.table.item(row, 0)
-            if item is not None:
-                try:
-                    selected_ids.append(int(item.text()))
-                except ValueError:
-                    pass
-        return selected_ids
+            if 0 <= row < len(self._feeds):
+                selections.append(self._feeds[row])
+        return selections

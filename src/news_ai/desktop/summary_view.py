@@ -12,28 +12,31 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QLabel,
     QSpinBox,
+    QFileDialog,
 )
 from PyQt6.QtCore import QThread, pyqtSignal
 from loguru import logger
 
-from ..config import AppConfig
+from ..config import AppConfig, get_user_preferences, save_user_preferences, UserPreferences
 from ..miniflux_client import MinifluxClient
 from ..ai_client import AIClientFactory
 from ..summarizer import NewsSummarizer
 from ..exporter import MarkdownExporter
+from ..models import SummaryReport
+from .feed_list import FeedSelection
 
 
 class SummaryWorker(QThread):
     """Worker thread for generating summaries asynchronously."""
 
-    finished = pyqtSignal(str, str)  # filepath, summary_content
+    finished = pyqtSignal(SummaryReport)  # report object
     error = pyqtSignal(str)
     progress = pyqtSignal(int)
     empty_warning = pyqtSignal(str)
 
     def __init__(
         self,
-        feed_ids: list[int],
+        feed_selections: list[FeedSelection],
         config: AppConfig,
         limit: int = 20,
         parent: Optional["SummaryViewWidget"] = None,
@@ -41,13 +44,13 @@ class SummaryWorker(QThread):
         """Initialize the summary worker.
 
         Args:
-            feed_ids: List of feed IDs to summarize.
+            feed_selections: List of FeedSelection objects with fetch_full_content settings.
             config: Application configuration.
             limit: Maximum entries per feed.
             parent: Parent widget.
         """
         super().__init__(parent)
-        self._feed_ids = feed_ids
+        self._feed_selections = feed_selections
         self._config = config
         self._limit = limit
 
@@ -59,16 +62,23 @@ class SummaryWorker(QThread):
                 url=self._config.miniflux.url,
                 api_key=self._config.miniflux.api_key,
             )
-            entries = client.get_entries(self._feed_ids, limit=self._limit)
+
+            feed_ids = [fs.feed.id for fs in self._feed_selections]
+            entries = client.get_entries(feed_ids, limit=self._limit)
 
             if not entries:
                 msg = "警告: 所有选定的 Feeds 暂无新闻"
                 logger.warning(msg)
                 self.empty_warning.emit(msg)
-                self.finished.emit("", "无新闻可总结")
                 return
 
             self.progress.emit(40)
+
+            # Build set of feed IDs that need full content fetching
+            feeds_to_fetch = {
+                fs.feed.id for fs in self._feed_selections if fs.fetch_full_content
+            }
+            logger.info(f"Feeds to fetch full content: {feeds_to_fetch}")
 
             ai_client = AIClientFactory.create(
                 self._config.ai.provider,
@@ -81,8 +91,12 @@ class SummaryWorker(QThread):
             )
             self.progress.emit(60)
 
-            summarizer = NewsSummarizer(ai_client=ai_client)
-            feeds = []
+            summarizer = NewsSummarizer(
+                ai_client=ai_client,
+                miniflux_client=client,
+                feeds_to_fetch_full_content=feeds_to_fetch,
+            )
+            feeds = [fs.feed for fs in self._feed_selections]
             result = summarizer.summarize(entries, feeds)
             self.progress.emit(80)
 
@@ -96,13 +110,8 @@ class SummaryWorker(QThread):
             except Exception as e:
                 logger.warning(f"Failed to mark entries as read: {e}")
 
-            # Generate markdown content
-            exporter = MarkdownExporter(output_dir=".")
-            filepath = exporter.export(result)
-            summary_content = exporter.render_report(result)
-
             self.progress.emit(100)
-            self.finished.emit(str(filepath), summary_content)
+            self.finished.emit(result)
         except Exception as e:
             logger.exception("Summary generation failed")
             self.error.emit(str(e))
@@ -117,7 +126,7 @@ class SummaryViewWidget(QWidget):
         self._config: Optional[AppConfig] = None
         self._worker: Optional[SummaryWorker] = None
         self._feed_list_widget: Optional["FeedListWidget"] = None
-        self._current_summary: str = ""
+        self._current_report: Optional[SummaryReport] = None
         self._current_filepath: str = ""
         self._setup_ui()
 
@@ -189,13 +198,13 @@ class SummaryViewWidget(QWidget):
             logger.warning("Feed list widget not set")
             return
 
-        feed_ids = self._feed_list_widget.get_selected_feed_ids()
-        if not feed_ids:
+        feed_selections = self._feed_list_widget.get_selected_feed_selections()
+        if not feed_selections:
             self.status_label.setText("请先在 Feeds 标签页选择要分析的 feeds")
             return
 
         limit = self.limit_spin.value()
-        logger.info(f"Generate summary for feeds: {feed_ids}, limit: {limit}")
+        logger.info(f"Generate summary for {len(feed_selections)} feeds, limit: {limit}")
         self.generate_button.setEnabled(False)
         self.cancel_button.setEnabled(True)
         self.text_edit.clear()
@@ -203,7 +212,7 @@ class SummaryViewWidget(QWidget):
         self.export_button.setEnabled(False)
 
         self._worker = SummaryWorker(
-            feed_ids=feed_ids,
+            feed_selections=feed_selections,
             config=self._config,
             limit=limit,
             parent=self,
@@ -216,9 +225,55 @@ class SummaryViewWidget(QWidget):
 
     def _on_export_clicked(self) -> None:
         """Handle export button click."""
-        if self._current_filepath:
-            self.status_label.setText(f"已导出到: {self._current_filepath}")
-            logger.info(f"Exported to: {self._current_filepath}")
+        if self._current_report is None:
+            self.status_label.setText("没有可导出的总结内容")
+            return
+
+        # Generate default filename from feeds
+        feed_titles = [f.title for f in self._current_report.feeds]
+        if len(feed_titles) <= 3:
+            feeds_str = "_".join(feed_titles)
+        else:
+            feeds_str = "_".join(feed_titles[:3]) + "_等"
+        default_filename = f"{feeds_str}_{datetime.now().strftime('%Y%m%d_%H%M')}.md"
+
+        # Get remembered export directory
+        from pathlib import Path
+        prefs = get_user_preferences()
+        if prefs.last_export_dir:
+            default_dir = prefs.last_export_dir
+        else:
+            default_dir = str(Path.home())
+
+        # Show save dialog
+        filepath, selected_filter = QFileDialog.getSaveFileName(
+            self,
+            "导出 Markdown 文件",
+            str(Path(default_dir) / default_filename),
+            "Markdown Files (*.md);;All Files (*)",
+        )
+
+        if not filepath:
+            # User cancelled
+            return
+
+        # Remember the directory for next time
+        selected_path = Path(filepath)
+        export_dir = str(selected_path.parent)
+        prefs.last_export_dir = export_dir
+        save_user_preferences(prefs)
+        logger.info(f"Remembered export directory: {export_dir}")
+
+        # Export to selected path
+        try:
+            exporter = MarkdownExporter(output_dir=".")
+            exporter.export_to_path(self._current_report, filepath)
+            self._current_filepath = filepath
+            self.status_label.setText(f"已导出到: {filepath}")
+            logger.info(f"Exported to: {filepath}")
+        except Exception as e:
+            self.status_label.setText(f"导出失败: {e}")
+            logger.error(f"Export failed: {e}")
 
     def _on_cancel_clicked(self) -> None:
         """Handle cancel button click."""
@@ -233,15 +288,16 @@ class SummaryViewWidget(QWidget):
         """Handle progress updates."""
         self.progress_bar.setValue(value)
 
-    def _on_finished(self, filepath: str, summary_content: str) -> None:
+    def _on_finished(self, report: SummaryReport) -> None:
         """Handle summary generation completion."""
-        logger.info(f"Summary generated: {filepath}")
-        self._current_filepath = filepath
-        self._current_summary = summary_content
+        logger.info(f"Summary generated with {len(report.result.highlights)} highlights")
+        self._current_report = report
 
         # Display summary in text edit
+        exporter = MarkdownExporter(output_dir=".")
+        summary_content = exporter.render_report(report)
         self.text_edit.setPlainText(summary_content)
-        self.status_label.setText(f"总结生成完成！点击「Export Markdown」导出，或直接在右侧查看")
+        self.status_label.setText("总结生成完成！点击「Export Markdown」选择保存路径")
         self.export_button.setEnabled(True)
         self._reset_buttons()
 

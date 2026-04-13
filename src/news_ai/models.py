@@ -29,12 +29,21 @@ class Entry:
 
 
 @dataclass
+class Ticker:
+    """股票/投资标的"""
+    code: str  # 股票代码，如 SH600519
+    name: str  # 公司名称，如 贵州茅台
+
+
+@dataclass
 class Highlight:
     """重点新闻"""
     title: str
     source: str
     summary: str
     importance: str = "medium"  # high, medium, low
+    tickers: list[str] = field(default_factory=list)  # 相关股票代码列表
+    url: str = ""  # 原文链接
 
 
 @dataclass
@@ -44,6 +53,7 @@ class SummarizeResult:
     highlights: list[Highlight]
     keywords: list[str]
     sentiment: str  # positive, neutral, negative
+    tickers: list[Ticker] = field(default_factory=list)  # 标的一览
     generated_at: datetime = field(default_factory=datetime.now)
 
 

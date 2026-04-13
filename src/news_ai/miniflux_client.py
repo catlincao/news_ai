@@ -181,9 +181,21 @@ class MinifluxClient:
             Full content as string
         """
         try:
-            content = self._client.fetch_entry_content(entry_id)
-            logger.debug(f"Fetched content for entry {entry_id}")
-            return content
+            entry = self._client.fetch_entry_content(entry_id)
+            logger.info(f"[MINIFLUX] fetch_entry_content for entry {entry_id}, returned type: {type(entry)}")
+
+            # Extract content from entry object (could be dict or object with content field)
+            if isinstance(entry, dict):
+                content = entry.get("content", "") or entry.get("body", "")
+                logger.info(f"[MINIFLUX] Entry dict keys: {list(entry.keys()) if isinstance(entry, dict) else 'N/A'}")
+                logger.info(f"[MINIFLUX] Raw content length: {len(content) if content else 0}")
+                logger.info(f"[MINIFLUX] Raw content:\n{content}")
+                return content
+            elif hasattr(entry, "content"):
+                return entry.content or ""
+            elif hasattr(entry, "body"):
+                return entry.body or ""
+            return str(entry) if entry else ""
         except Exception as e:
             logger.warning(f"Failed to fetch content for entry {entry_id}: {e}")
             return ""

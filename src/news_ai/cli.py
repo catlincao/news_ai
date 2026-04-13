@@ -199,7 +199,7 @@ def summary(
                         "temperature": config.ai.temperature,
                     },
                 )
-                summarizer = NewsSummarizer(ai_client)
+                summarizer = NewsSummarizer(ai_client, miniflux_client=client)
                 report = summarizer.summarize(entries, selected_feeds)
 
             console.print(f"[green]✅ AI 分析完成[/green]")

@@ -1,8 +1,11 @@
 """Configuration management for News AI Summary"""
 
 import os
+from pathlib import Path
 from typing import Optional
 
+import yaml
+from loguru import logger
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -82,3 +85,39 @@ def reload_config() -> AppConfig:
     global _config
     _config = AppConfig.from_env()
     return _config
+
+
+class UserPreferences(BaseModel):
+    """User preferences stored in local file"""
+    last_export_dir: str = ""
+
+
+def _get_preferences_path() -> Path:
+    """Get the path to the preferences file."""
+    config_dir = Path.home() / ".news_ai"
+    return config_dir / "preferences.yaml"
+
+
+def get_user_preferences() -> UserPreferences:
+    """Load user preferences from file."""
+    prefs_path = _get_preferences_path()
+    if prefs_path.exists():
+        try:
+            data = yaml.safe_load(prefs_path.read_text(encoding="utf-8"))
+            if data:
+                return UserPreferences(**data)
+        except Exception as e:
+            logger.warning(f"Failed to load preferences: {e}")
+    return UserPreferences()
+
+
+def save_user_preferences(prefs: UserPreferences) -> None:
+    """Save user preferences to file."""
+    config_dir = Path.home() / ".news_ai"
+    try:
+        config_dir.mkdir(parents=True, exist_ok=True)
+        prefs_path = _get_preferences_path()
+        prefs_path.write_text(yaml.safe_dump(prefs.model_dump(), allow_unicode=True))
+        logger.info(f"Saved preferences to {prefs_path}")
+    except Exception as e:
+        logger.warning(f"Failed to save preferences: {e}")
