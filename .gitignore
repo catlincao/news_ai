@@ -53,3 +53,12 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
+
+# Flutter/Dart build artifacts
+apk/.dart_tool/
+apk/build/
+apk/android/.gradle/
+
+# Gradle
+*.bin
+*.d
