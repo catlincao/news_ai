@@ -54,3 +54,4 @@ uv.lock
 # OS
 .DS_Store
 Thumbs.db
+apk/build/*
