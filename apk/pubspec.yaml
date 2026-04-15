@@ -1,0 +1,32 @@
+name: news_ai
+description: News AI Summary - Android App for AI-powered news summarization
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.0.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_bloc: ^8.1.6
+  dio: ^5.4.3+1
+  freezed_annotation: ^2.4.1
+  json_annotation: ^4.9.0
+  shared_preferences: ^2.2.3
+  equatable: ^2.0.5
+  intl: ^0.19.0
+  url_launcher: ^6.3.0
+  flutter_linkify: ^6.0.0
+  cupertino_icons: ^1.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  build_runner: ^2.4.9
+  freezed: ^2.5.2
+  json_serializable: ^6.8.0
+
+flutter:
+  uses-material-design: true
