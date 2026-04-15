@@ -36,7 +36,7 @@ uv sync
 
 ```bash
 # Miniflux 配置
-export MINIFLUX_URL="http://47.112.115.122:14545"
+export MINIFLUX_URL="https://xxx"
 export MINIFLUX_API_KEY="your_miniflux_api_key"
 
 # AI 配置（选择其一）
